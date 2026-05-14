@@ -9,6 +9,10 @@ class EventType(str, Enum):
     CONTEXT_COMPRESSED = "context.compressed"
     CHAT_DELTA = "chat.delta"
     CHAT_FINAL = "chat.final"
+    CHAT_ASK_USER_QUESTION = "chat.ask_user_question"
+    CHAT_INVOCATION_PAUSED = "chat.invocation_paused"
+    TASK_START = "task.start"
+    TASK_COMPLETE = "task.complete"
     TOOL_CALL = "chat.tool_call"
     TOOL_RESULT = "chat.tool_result"
 
@@ -20,6 +24,10 @@ class FlowItemType(str, Enum):
     TOOL_CALL = "tool_call"
     COMPRESSION = "compression"
     ASSISTANT_RESPONSE = "assistant_response"
+    ASK_USER_QUESTION = "ask_user_question"
+    INVOCATION_PAUSED = "invocation_paused"
+    TASK_START = "task_start"
+    TASK_COMPLETE = "task_complete"
 
 
 class Role(str, Enum):

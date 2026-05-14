@@ -54,6 +54,17 @@ class FlowItem:
     before: Optional[int] = None
     after: Optional[int] = None
     rate: Optional[float] = None
+    questions: Optional[List[Dict[str, Any]]] = None
+    source: Optional[str] = None
+    awaiting_user_input: Optional[bool] = None
+    task_id: Optional[str] = None
+    task_content: Optional[str] = None
+    task_index: Optional[int] = None
+    total_tasks: Optional[int] = None
+    parent_request_id: Optional[str] = None
+    task_status: Optional[str] = None
+    task_duration_ms: Optional[int] = None
+    task_error: Optional[Any] = None
 
 
 @dataclass
@@ -80,6 +91,10 @@ class Statistics:
     total_requests: int = 0
     user_messages: int = 0
     assistant_messages: int = 0
+    ask_user_questions: int = 0
+    invocation_pauses: int = 0
+    task_starts: int = 0
+    task_completes: int = 0
     tool_calls: int = 0
     context_compressed: int = 0
     total_time: float = 0.0

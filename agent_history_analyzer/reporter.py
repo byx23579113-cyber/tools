@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 from .constants import FlowItemType
 from .models import AnalysisResult, FlowItem, RequestData
@@ -137,6 +137,14 @@ class HTMLReporter:
             return self._render_compression(flow_item, request)
         elif flow_item.type == FlowItemType.ASSISTANT_RESPONSE:
             return self._render_assistant_response(flow_item)
+        elif flow_item.type == FlowItemType.ASK_USER_QUESTION:
+            return self._render_ask_user_question(flow_item)
+        elif flow_item.type == FlowItemType.INVOCATION_PAUSED:
+            return self._render_invocation_paused(flow_item)
+        elif flow_item.type == FlowItemType.TASK_START:
+            return self._render_task_start(flow_item)
+        elif flow_item.type == FlowItemType.TASK_COMPLETE:
+            return self._render_task_complete(flow_item)
         return ""
 
     def _render_reasoning(self, flow_item: FlowItem) -> str:
@@ -200,6 +208,14 @@ class HTMLReporter:
                     prev_end_time = prev_item.end_timestamp or prev_item.timestamp
                 elif prev_item.type == FlowItemType.ASSISTANT_RESPONSE:
                     prev_end_time = prev_item.end_timestamp or prev_item.timestamp
+                elif prev_item.type == FlowItemType.ASK_USER_QUESTION:
+                    prev_end_time = prev_item.timestamp
+                elif prev_item.type == FlowItemType.INVOCATION_PAUSED:
+                    prev_end_time = prev_item.timestamp
+                elif prev_item.type == FlowItemType.TASK_START:
+                    prev_end_time = prev_item.timestamp
+                elif prev_item.type == FlowItemType.TASK_COMPLETE:
+                    prev_end_time = prev_item.timestamp + prev_item.duration
                 elif prev_item.type == FlowItemType.COMPRESSION:
                     prev_end_time = prev_item.timestamp
                 break
@@ -244,6 +260,180 @@ class HTMLReporter:
                     <span class="badge badge-green">助手回复</span>
                 </div>
                 <div class="message-content">{escape_html(content)}</div>
+            </div>
+        </div>"""
+
+    def _render_ask_user_question(self, flow_item: FlowItem) -> str:
+        """渲染 chat.ask_user_question（权限审批、选项问卷等）"""
+        index = self._flow_item_index
+        self._flow_item_index += 1
+        time_html = format_time_display(flow_item.duration)
+        timestamp_str = datetime.fromtimestamp(flow_item.timestamp).strftime("%H:%M:%S")
+        source = flow_item.source or ""
+        source_badge = (
+            f'<span class="badge badge-purple">{escape_html(source)}</span>' if source else ""
+        )
+        blocks_html = self._format_question_blocks(flow_item.questions or [])
+
+        return f"""<div class="flow-item">
+            <div class="message-box ask-user-question" id="flow-item-{index}">
+                <div class="message-header">
+                    {time_html}
+                    <span class="badge badge-purple">向用户提问</span>
+                    {source_badge}
+                    <span style="font-size: 0.9em; color: #999;">{timestamp_str}</span>
+                </div>
+                {blocks_html}
+            </div>
+        </div>"""
+
+    def _format_question_blocks(self, questions: List[Dict[str, Any]]) -> str:
+        """将 questions 数组格式化为 HTML"""
+        if not questions:
+            summary = escape_html("(无 questions 字段)")
+            return f'<div class="message-content">{summary}</div>'
+
+        parts: List[str] = []
+        for i, q in enumerate(questions, 1):
+            header = q.get("header") or f"问题 {i}"
+            body = q.get("question") or ""
+            multi = q.get("multi_select")
+            if multi is None:
+                multi = q.get("multiSelect")
+            mode = "多选" if multi else "单选"
+
+            opts_lines: List[str] = []
+            for opt in q.get("options") or []:
+                if not isinstance(opt, dict):
+                    continue
+                label = opt.get("label") or ""
+                desc = opt.get("description") or ""
+                if desc:
+                    opts_lines.append(f"<li><strong>{escape_html(label)}</strong> — {escape_html(desc)}</li>")
+                else:
+                    opts_lines.append(f"<li><strong>{escape_html(label)}</strong></li>")
+
+            opts_html = (
+                f"<ul class='question-options'>{''.join(opts_lines)}</ul>"
+                if opts_lines
+                else ""
+            )
+
+            parts.append(f"""<div class="question-block">
+                <div class="message-label">{escape_html(header)} <span class="badge badge-blue">{mode}</span></div>
+                <div class="message-content question-body">{escape_html(body)}</div>
+                {opts_html}
+            </div>""")
+
+        return "\n".join(parts)
+
+    def _render_invocation_paused(self, flow_item: FlowItem) -> str:
+        """渲染 chat.invocation_paused（本轮调用暂停 / 流程中止点）"""
+        index = self._flow_item_index
+        self._flow_item_index += 1
+        time_html = format_time_display(flow_item.duration)
+        timestamp_str = datetime.fromtimestamp(flow_item.timestamp).strftime("%H:%M:%S")
+        summary = escape_html(flow_item.content or "调用暂停")
+
+        meta_lines: List[str] = []
+        if flow_item.task_id:
+            meta_lines.append(f"<div><span class='message-label'>任务 task_id：</span>{escape_html(flow_item.task_id)}</div>")
+        if flow_item.awaiting_user_input is not None:
+            label = "是" if flow_item.awaiting_user_input else "否"
+            meta_lines.append(
+                f"<div><span class='message-label'>等待用户输入 awaiting_user_input：</span>{label}</div>"
+            )
+        meta_html = "".join(meta_lines)
+
+        note = (
+            "<div class='message-content invocation-paused-note'>本轮 Agent 调用在此处结束；"
+            "若上方为「等待用户输入」，通常需用户发送下一条消息后才会进入新的 request 继续执行。</div>"
+        )
+
+        return f"""<div class="flow-item">
+            <div class="message-box invocation-paused" id="flow-item-{index}">
+                <div class="message-header">
+                    {time_html}
+                    <span class="badge badge-amber">调用暂停</span>
+                    <span style="font-size: 0.9em; color: #999;">{timestamp_str}</span>
+                </div>
+                <div class="message-label">摘要</div>
+                <div class="message-content">{summary}</div>
+                {meta_html}
+                {note}
+            </div>
+        </div>"""
+
+    def _render_task_start(self, flow_item: FlowItem) -> str:
+        """渲染 task.start（Skill 阶段开始）"""
+        index = self._flow_item_index
+        self._flow_item_index += 1
+        time_html = format_time_display(flow_item.duration)
+        timestamp_str = datetime.fromtimestamp(flow_item.timestamp).strftime("%H:%M:%S")
+        summary = escape_html(flow_item.content or "子任务开始")
+
+        rows: List[str] = []
+        if flow_item.task_id:
+            rows.append(f"<div><span class='message-label'>task_id：</span>{escape_html(flow_item.task_id)}</div>")
+        if flow_item.task_content:
+            rows.append(f"<div><span class='message-label'>阶段：</span>{escape_html(flow_item.task_content)}</div>")
+        if flow_item.task_index is not None and flow_item.total_tasks is not None:
+            rows.append(
+                f"<div><span class='message-label'>进度：</span>第 {flow_item.task_index + 1} / {flow_item.total_tasks} 步</div>"
+            )
+        if flow_item.parent_request_id:
+            rows.append(
+                f"<div><span class='message-label'>parent_request_id：</span>{escape_html(flow_item.parent_request_id)}</div>"
+            )
+        detail_html = "".join(rows)
+
+        return f"""<div class="flow-item">
+            <div class="message-box task-start" id="flow-item-{index}">
+                <div class="message-header">
+                    {time_html}
+                    <span class="badge badge-teal">子任务开始</span>
+                    <span style="font-size: 0.9em; color: #999;">{timestamp_str}</span>
+                </div>
+                <div class="message-label">摘要</div>
+                <div class="message-content">{summary}</div>
+                {detail_html}
+            </div>
+        </div>"""
+
+    def _render_task_complete(self, flow_item: FlowItem) -> str:
+        """渲染 task.complete（阶段结束与耗时）"""
+        index = self._flow_item_index
+        self._flow_item_index += 1
+        time_html = format_time_display(flow_item.duration)
+        timestamp_str = datetime.fromtimestamp(flow_item.timestamp).strftime("%H:%M:%S")
+        summary = escape_html(flow_item.content or "子任务完成")
+
+        status_badge = ""
+        if flow_item.task_status:
+            cls = "badge-green" if flow_item.task_status == "succeeded" else "badge-red"
+            status_badge = f'<span class="badge {cls}">{escape_html(flow_item.task_status)}</span>'
+
+        ms_line = ""
+        if flow_item.task_duration_ms is not None:
+            ms_line = f"<div><span class='message-label'>duration_ms：</span>{flow_item.task_duration_ms}</div>"
+
+        err_html = ""
+        if flow_item.task_error is not None:
+            err_html = f"""<div style="margin-top: 8px;"><span class="message-label">error：</span>
+                <pre style="white-space: pre-wrap; word-wrap: break-word; background: #ffebee; padding: 8px; border-radius: 4px; font-size: 0.85em;">{escape_html(str(flow_item.task_error))}</pre></div>"""
+
+        return f"""<div class="flow-item">
+            <div class="message-box task-complete" id="flow-item-{index}">
+                <div class="message-header">
+                    {time_html}
+                    <span class="badge badge-cyan">子任务完成</span>
+                    {status_badge}
+                    <span style="font-size: 0.9em; color: #999;">{timestamp_str}</span>
+                </div>
+                <div class="message-label">摘要</div>
+                <div class="message-content">{summary}</div>
+                {ms_line}
+                {err_html}
             </div>
         </div>"""
 

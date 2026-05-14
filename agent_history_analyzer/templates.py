@@ -149,6 +149,15 @@ CSS_TEMPLATE = """
         .assistant-message { border-left: 4px solid #4CAF50; }
         .tool-call { border-left: 4px solid #FF9800; }
         .compression { border-left: 4px solid #F44336; }
+        .ask-user-question { border-left: 4px solid #9C27B0; }
+        .invocation-paused { border-left: 4px solid #FF8F00; background: #fffaf5; }
+        .invocation-paused-note { margin-top: 10px; color: #555; font-size: 0.95em; }
+        .task-start { border-left: 4px solid #00897B; background: #f7fffe; }
+        .task-complete { border-left: 4px solid #00838F; background: #f7fdff; }
+        .question-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee; }
+        .question-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+        .question-body { white-space: pre-wrap; margin-top: 6px; }
+        ul.question-options { margin: 8px 0 0 1.2em; color: #444; }
 
         .chart-container {
             background: white;
@@ -217,6 +226,10 @@ CSS_TEMPLATE = """
         .badge-green { background: #e8f5e9; color: #388e3c; }
         .badge-orange { background: #fff3e0; color: #f57c00; }
         .badge-red { background: #ffebee; color: #d32f2f; }
+        .badge-purple { background: #f3e5f5; color: #7b1fa2; }
+        .badge-amber { background: #fff3e0; color: #e65100; }
+        .badge-teal { background: #e0f2f1; color: #00695c; }
+        .badge-cyan { background: #e0f7fa; color: #006064; }
 
         .metadata {
             font-size: 0.9em;
@@ -412,6 +425,22 @@ def get_stats_section(stats: Statistics) -> str:
             <div class="stat-card">
                 <div class="stat-value">{stats.assistant_messages}</div>
                 <div class="stat-label">助手回复数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.ask_user_questions}</div>
+                <div class="stat-label">向用户提问次数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.invocation_pauses}</div>
+                <div class="stat-label">调用暂停次数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.task_starts}</div>
+                <div class="stat-label">子任务开始 (task.start)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.task_completes}</div>
+                <div class="stat-label">子任务完成 (task.complete)</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{stats.tool_calls}</div>

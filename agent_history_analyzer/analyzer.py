@@ -86,6 +86,20 @@ class EventAnalyzer:
 
         elif event_type == EventType.CHAT_FINAL:
             self._handle_final(event, request_data, result, timestamp, content)
+        elif event_type == "chat.reasoning":
+            self._handle_reasoning(event, request_data, timestamp, content)
+
+        elif event_type == EventType.CHAT_ASK_USER_QUESTION:
+            self._handle_ask_user_question(event, request_data, result, timestamp)
+
+        elif event_type == EventType.CHAT_INVOCATION_PAUSED:
+            self._handle_invocation_paused(event, request_data, result, timestamp)
+
+        elif event_type == EventType.TASK_START:
+            self._handle_task_start(event, request_data, result, timestamp)
+
+        elif event_type == EventType.TASK_COMPLETE:
+            self._handle_task_complete(event, request_data, result, timestamp)
 
         elif event_type == EventType.TOOL_CALL:
             self._handle_tool_call(event, request_data, result, timestamp)
@@ -178,7 +192,10 @@ class EventAnalyzer:
         payload = event.get("event_payload", {})
         source_type = payload.get("source_chunk_type")
 
-        if source_type != SOURCE_CHUNK_TYPES["ANSWER"]:
+        # 兼容两种格式：
+        # 1) 旧格式：chat.final + event_payload.source_chunk_type == answer
+        # 2) 新格式：chat.final 无 event_payload
+        if source_type is not None and source_type != SOURCE_CHUNK_TYPES["ANSWER"]:
             return
 
         request_data.assistant_response = content
@@ -196,6 +213,216 @@ class EventAnalyzer:
             )
         )
 
+    def _handle_reasoning(
+        self,
+        event: Dict[str, Any],
+        request_data: RequestData,
+        timestamp: float,
+        content: str,
+    ):
+        """处理新格式推理事件（chat.reasoning）"""
+        self._handle_reasoning_content(request_data, timestamp, content)
+
+    def _handle_ask_user_question(
+        self,
+        event: Dict[str, Any],
+        request_data: RequestData,
+        result: AnalysisResult,
+        timestamp: float,
+    ):
+        """处理向用户提问事件（含权限审批等）"""
+        questions = event.get("questions") or []
+        source = event.get("source")
+        summary = self._summarize_ask_user_question(questions, source)
+
+        request_data.execution_flow.append(
+            FlowItem(
+                type=FlowItemType.ASK_USER_QUESTION,
+                timestamp=timestamp,
+                content=summary,
+                questions=questions,
+                source=source if isinstance(source, str) else None,
+            )
+        )
+        result.statistics.ask_user_questions += 1
+
+    def _handle_invocation_paused(
+        self,
+        event: Dict[str, Any],
+        request_data: RequestData,
+        result: AnalysisResult,
+        timestamp: float,
+    ):
+        """处理调用暂停（本轮 invocation 结束，常伴随等待用户下一条消息）"""
+        awaiting = event.get("awaiting_user_input")
+        awaiting_bool: Optional[bool] = awaiting if isinstance(awaiting, bool) else None
+        raw_tid = event.get("task_id")
+        task_id = raw_tid if isinstance(raw_tid, str) else None
+
+        summary = self._summarize_invocation_paused(awaiting_bool, task_id)
+
+        request_data.execution_flow.append(
+            FlowItem(
+                type=FlowItemType.INVOCATION_PAUSED,
+                timestamp=timestamp,
+                content=summary,
+                awaiting_user_input=awaiting_bool,
+                task_id=task_id,
+            )
+        )
+        result.statistics.invocation_pauses += 1
+
+    def _summarize_invocation_paused(
+        self,
+        awaiting_user_input: Optional[bool],
+        task_id: Optional[str],
+    ) -> str:
+        """暂停事件的单行摘要"""
+        parts: List[str] = ["调用暂停"]
+        if task_id:
+            parts.append(task_id)
+        if awaiting_user_input is True:
+            parts.append("等待用户输入")
+        elif awaiting_user_input is False:
+            parts.append("未等待输入")
+        return " · ".join(parts)
+
+    def _handle_task_start(
+        self,
+        event: Dict[str, Any],
+        request_data: RequestData,
+        result: AnalysisResult,
+        timestamp: float,
+    ):
+        """处理子任务/阶段开始（skill step 等）"""
+        task_id = event.get("task_id")
+        tid = task_id if isinstance(task_id, str) else None
+        tc_raw = event.get("task_content")
+        task_content = tc_raw if isinstance(tc_raw, str) else None
+
+        ti = event.get("task_index")
+        task_index = ti if isinstance(ti, int) else None
+
+        tt = event.get("total_tasks")
+        total_tasks = tt if isinstance(tt, int) else None
+
+        pr = event.get("parent_request_id")
+        parent_request_id = pr if isinstance(pr, str) else None
+
+        summary = self._summarize_task_start(task_content, tid, task_index, total_tasks)
+
+        request_data.execution_flow.append(
+            FlowItem(
+                type=FlowItemType.TASK_START,
+                timestamp=timestamp,
+                content=summary,
+                task_id=tid,
+                task_content=task_content,
+                task_index=task_index,
+                total_tasks=total_tasks,
+                parent_request_id=parent_request_id,
+            )
+        )
+        result.statistics.task_starts += 1
+
+    def _summarize_task_start(
+        self,
+        task_content: Optional[str],
+        task_id: Optional[str],
+        task_index: Optional[int],
+        total_tasks: Optional[int],
+    ) -> str:
+        """task.start 单行摘要"""
+        title = task_content or task_id or "子任务"
+        progress = ""
+        if task_index is not None and total_tasks is not None and total_tasks > 0:
+            progress = f" ({task_index + 1}/{total_tasks})"
+        elif task_id:
+            progress = f" · {task_id}"
+        return f"{title}{progress}"
+
+    def _handle_task_complete(
+        self,
+        event: Dict[str, Any],
+        request_data: RequestData,
+        result: AnalysisResult,
+        timestamp: float,
+    ):
+        """处理子任务/阶段结束"""
+        task_id = event.get("task_id")
+        tid = task_id if isinstance(task_id, str) else None
+        tc_raw = event.get("task_content")
+        task_content = tc_raw if isinstance(tc_raw, str) else None
+
+        status_raw = event.get("status")
+        task_status = status_raw if isinstance(status_raw, str) else None
+
+        dm = event.get("duration_ms")
+        if isinstance(dm, (int, float)):
+            task_duration_ms = int(dm)
+            duration_sec = float(dm) / 1000.0
+        else:
+            task_duration_ms = None
+            duration_sec = 0.0
+
+        err = event.get("error")
+
+        summary = self._summarize_task_complete(
+            task_content, tid, task_status, task_duration_ms
+        )
+
+        request_data.execution_flow.append(
+            FlowItem(
+                type=FlowItemType.TASK_COMPLETE,
+                timestamp=timestamp,
+                content=summary,
+                task_id=tid,
+                task_content=task_content,
+                task_status=task_status,
+                task_duration_ms=task_duration_ms,
+                task_error=err,
+                duration=duration_sec,
+            )
+        )
+        result.statistics.task_completes += 1
+
+    def _summarize_task_complete(
+        self,
+        task_content: Optional[str],
+        task_id: Optional[str],
+        status: Optional[str],
+        duration_ms: Optional[int],
+    ) -> str:
+        """task.complete 单行摘要"""
+        title = task_content or task_id or "子任务"
+        parts: List[str] = [title]
+        if status:
+            parts.append(status)
+        if duration_ms is not None:
+            if duration_ms >= 1000:
+                parts.append(f"{duration_ms / 1000:.2f}s")
+            else:
+                parts.append(f"{duration_ms}ms")
+        return " · ".join(parts)
+
+    def _summarize_ask_user_question(
+        self,
+        questions: List[Dict[str, Any]],
+        source: Optional[str],
+    ) -> str:
+        """生成提问事件的简短摘要（用于排行与展示）"""
+        prefix = f"[{source}] " if source else ""
+        if not questions:
+            return f"{prefix}向用户提问"
+        first = questions[0]
+        header = first.get("header") or ""
+        if header:
+            rest = f" 等 {len(questions)} 项" if len(questions) > 1 else ""
+            return f"{prefix}{header}{rest}"
+        qtext = first.get("question") or ""
+        snippet = qtext[:120] + ("..." if len(qtext) > 120 else "")
+        return f"{prefix}{snippet}"
+
     def _handle_tool_call(
         self,
         event: Dict[str, Any],
@@ -205,7 +432,7 @@ class EventAnalyzer:
     ):
         """处理工具调用"""
         payload = event.get("event_payload", {})
-        tool_call = payload.get("tool_call", {})
+        tool_call = payload.get("tool_call") or event.get("tool_call", {})
 
         tool_call_data = ToolCallData(
             name=tool_call.get("name"),
@@ -240,9 +467,11 @@ class EventAnalyzer:
     ):
         """处理工具结果"""
         payload = event.get("event_payload", {})
-        tool_call_id = payload.get("tool_call_id")
-        tool_name = payload.get("tool_name")
+        tool_call_id = payload.get("tool_call_id") or event.get("tool_call_id")
+        tool_name = payload.get("tool_name") or event.get("tool_name")
         result_content = payload.get("result")
+        if result_content is None:
+            result_content = event.get("result")
 
         duration = 0.0
         for tool_call in request_data.tool_calls:
@@ -269,6 +498,33 @@ class EventAnalyzer:
             )
         )
 
+    def _handle_reasoning_content(
+        self,
+        request_data: RequestData,
+        timestamp: float,
+        content: str,
+    ):
+        """追加推理内容到流程（复用逻辑）"""
+        if request_data.execution_flow:
+            last_item = request_data.execution_flow[-1]
+            if last_item.type == FlowItemType.REASONING:
+                if last_item.content is None:
+                    last_item.content = content
+                else:
+                    last_item.content += content
+                last_item.end_timestamp = timestamp
+                return
+
+        request_data.execution_flow.append(
+            FlowItem(
+                type=FlowItemType.REASONING,
+                content=content,
+                timestamp=timestamp,
+                start_timestamp=timestamp,
+                end_timestamp=timestamp,
+            )
+        )
+
     def _get_response_start_time(self, request_data: RequestData) -> float:
         """获取响应开始时间"""
         if not request_data.execution_flow:
@@ -281,6 +537,14 @@ class EventAnalyzer:
             return last_item.end_timestamp or last_item.timestamp
         elif last_item.type == FlowItemType.COMPRESSION:
             return last_item.timestamp
+        elif last_item.type == FlowItemType.ASK_USER_QUESTION:
+            return last_item.timestamp
+        elif last_item.type == FlowItemType.INVOCATION_PAUSED:
+            return last_item.timestamp
+        elif last_item.type == FlowItemType.TASK_START:
+            return last_item.timestamp
+        elif last_item.type == FlowItemType.TASK_COMPLETE:
+            return last_item.timestamp + last_item.duration
 
         return request_data.start_time
 
@@ -370,6 +634,50 @@ class EventAnalyzer:
             return TopDurationStep(
                 request_id=request_id,
                 type="助手回复",
+                duration=duration,
+                summary=summary,
+                user_input=user_input[:50] + ("..." if len(user_input) > 50 else ""),
+                flow_item_index=flow_item_index,
+            )
+
+        elif flow_item.type == FlowItemType.ASK_USER_QUESTION:
+            summary = flow_item.content or "向用户提问"
+            return TopDurationStep(
+                request_id=request_id,
+                type="用户提问",
+                duration=duration,
+                summary=summary,
+                user_input=user_input[:50] + ("..." if len(user_input) > 50 else ""),
+                flow_item_index=flow_item_index,
+            )
+
+        elif flow_item.type == FlowItemType.INVOCATION_PAUSED:
+            summary = flow_item.content or "调用暂停"
+            return TopDurationStep(
+                request_id=request_id,
+                type="调用暂停",
+                duration=duration,
+                summary=summary,
+                user_input=user_input[:50] + ("..." if len(user_input) > 50 else ""),
+                flow_item_index=flow_item_index,
+            )
+
+        elif flow_item.type == FlowItemType.TASK_START:
+            summary = flow_item.content or "子任务开始"
+            return TopDurationStep(
+                request_id=request_id,
+                type="子任务开始",
+                duration=duration,
+                summary=summary,
+                user_input=user_input[:50] + ("..." if len(user_input) > 50 else ""),
+                flow_item_index=flow_item_index,
+            )
+
+        elif flow_item.type == FlowItemType.TASK_COMPLETE:
+            summary = flow_item.content or "子任务完成"
+            return TopDurationStep(
+                request_id=request_id,
+                type="子任务完成",
                 duration=duration,
                 summary=summary,
                 user_input=user_input[:50] + ("..." if len(user_input) > 50 else ""),

@@ -49,6 +49,10 @@ class AgentHistoryAnalyzer:
         print(f"总对话轮数: {stats.total_requests}")
         print(f"用户消息数: {stats.user_messages}")
         print(f"助手回复数: {stats.assistant_messages}")
+        print(f"向用户提问: {stats.ask_user_questions} 次")
+        print(f"调用暂停: {stats.invocation_pauses} 次")
+        print(f"子任务开始 task.start: {stats.task_starts} 次")
+        print(f"子任务完成 task.complete: {stats.task_completes} 次")
         print(f"工具调用数: {stats.tool_calls}")
         print(f"上下文压缩: {stats.context_compressed} 次")
         print(f"总耗时: {stats.total_time:.2f} 秒")
@@ -117,7 +121,7 @@ def main():
     output_path: str
     if args.output == "report.html":
         # 使用默认值时，报告生成在JSON文件所在目录
-        output_path = str(json_path.parent / "report")
+        output_path = str(json_path.parent / "report.html")
     else:
         output_path = args.output
 
